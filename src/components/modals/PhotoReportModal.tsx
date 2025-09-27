@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { PhotoReportModalProps } from '../../types';
 import { IconClose } from '../common/Icon';
-import { useFileStorage } from '../../hooks/useFileStorage';
+import { usePhotoReports } from '../../hooks/usePhotoReports';
 
 interface PhotoItem {
     file: File;
@@ -14,15 +14,9 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
     const [photos, setPhotos] = useState<PhotoItem[]>([]);
     const modalRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const { uploadFileWithFallback, createPhotoReport, isUploading } = useFileStorage();
-    
-    // Проверка монтирования компонента для предотвращения обновления состояния после размонтирования
-    const isMounted = useRef(true);
+    const { createPhotoReportWithUploads, isLoading } = usePhotoReports();
 
     useEffect(() => {
-        // Компонент смонтирован
-        isMounted.current = true;
-        
         if (modalRef.current) {
             const focusableElements = modalRef.current.querySelectorAll<HTMLElement>(
                 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -32,12 +26,7 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
                 firstElement.focus();
             }
         }
-        
-        // Функция очистки, которая будет вызвана при размонтировании
-        return () => {
-            isMounted.current = false;
-        };
-    }, []); // Пустой массив зависимостей гарантирует, что это сработает только при монтировании/размонтировании
+    }, []);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || []);
@@ -47,13 +36,11 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     const preview = e.target?.result as string;
-                    if (isMounted.current) {
-                        setPhotos(prev => [...prev, {
-                            file,
-                            preview,
-                            caption: ''
-                        }]);
-                    }
+                    setPhotos(prev => [...prev, {
+                        file,
+                        preview,
+                        caption: ''
+                    }]);
                 };
                 reader.readAsDataURL(file);
             }
@@ -66,17 +53,13 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
     };
 
     const handleCaptionChange = (index: number, caption: string) => {
-        if (isMounted.current) {
-            setPhotos(prev => prev.map((photo, i) => 
-                i === index ? { ...photo, caption } : photo
-            ));
-        }
+        setPhotos(prev => prev.map((photo, i) => 
+            i === index ? { ...photo, caption } : photo
+        ));
     };
 
     const handleRemovePhoto = (index: number) => {
-        if (isMounted.current) {
-            setPhotos(prev => prev.filter((_, i) => i !== index));
-        }
+        setPhotos(prev => prev.filter((_, i) => i !== index));
     };
 
     const handleSave = async () => {
@@ -91,90 +74,31 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
         }
 
         try {
-            // Проверяем размер всех фотографий перед загрузкой
-            const maxFileSize = 10 * 1024 * 1024; // 10MB
-            const oversizedFiles = photos.filter(photo => photo.file.size > maxFileSize);
-            
-            if (oversizedFiles.length > 0) {
-                const fileSizeMB = (oversizedFiles[0].file.size / (1024 * 1024)).toFixed(2);
-                showAlert(`Файл "${oversizedFiles[0].file.name}" слишком большой: ${fileSizeMB}MB. Максимальный размер: 10MB`);
-                return;
-            }
-
-            // Загружаем все фотографии с fallback на base64
-            const uploadPromises = photos.map(async (photo, index) => {
-                try {
-                    const uploadResult = await uploadFileWithFallback('photos', photo.file);
-                    
-                    // Проверяем, что загрузка прошла успешно
-                    if (uploadResult.error) {
-                        throw new Error(`Ошибка загрузки фото "${photo.file.name}": ${uploadResult.error}`);
-                    }
-                    
-                    // Проверяем, что у нас есть необходимые данные
-                    if (!uploadResult.publicUrl || !uploadResult.path) {
-                        throw new Error(`Неполные данные после загрузки фото "${photo.file.name}": url=${uploadResult.publicUrl}, path=${uploadResult.path}`);
-                    }
-                    
-                    const photoData = {
-                        url: uploadResult.publicUrl,
-                        path: uploadResult.path,
-                        caption: photo.caption.trim() || 'Без подписи',
-                        isBase64: uploadResult.path.startsWith('base64://')
-                    };
-                    
-                    console.log(`Фото ${index + 1} успешно загружено:`, photoData);
-                    return photoData;
-                } catch (error) {
-                    console.error(`Ошибка загрузки фото ${index + 1} (${photo.file.name}):`, error);
-                    throw error;
-                }
-            });
-
-            const uploadedPhotosRes = await Promise.allSettled(uploadPromises);
-            const uploadedPhotos = uploadedPhotosRes
-                .filter((result): result is PromiseFulfilledResult<{ url: string; path: string; caption: string; isBase64: boolean; }> => result.status === 'fulfilled')
-                .map(result => result.value);
-
-            // Проверяем, есть ли файлы сохраненные как base64
-            const base64Count = uploadedPhotos.filter(photo => photo.isBase64).length;
-            if (base64Count > 0) {
-                console.log(`Внимание: ${base64Count} фотографий сохранены как base64 из-за проблем с Storage`);
-            }
-
-            // Проверяем, что у нас есть загруженные фотографии
-            if (uploadedPhotos.length === 0) {
-                throw new Error('Не удалось загрузить ни одной фотографии');
-            }
-
-            // Логируем данные перед сохранением в БД
-            const photoReportData = {
-                project_id: projectId,
+            // Собираем данные из формы
+            const formData = {
                 title: title.trim(),
-                photos: uploadedPhotos,
+                files: photos.map(photo => ({
+                    file: photo.file,
+                    caption: photo.caption
+                })),
+                projectId: projectId,
             };
-            console.log('Данные для сохранения в БД:', photoReportData);
 
-            // Создаем фотоотчет в базе данных
-            const photoReportRecord = await createPhotoReport(photoReportData);
-
-            // Вызываем callback с данными фотоотчета только если компонент все еще смонтирован
-            if (isMounted.current) {
-                onSave({
-                    id: photoReportRecord.id,
-                    title: photoReportRecord.title,
-                    photos: uploadedPhotos,
-                    date: photoReportRecord.date
-                });
-            }
-        } catch (error) {
-            console.error('Ошибка при сохранении фотоотчета:', error);
+            // Вызываем ОДНУ функцию из хука
+            const photoReportRecord = await createPhotoReportWithUploads(formData);
             
-            // Показываем более информативное сообщение об ошибке только если компонент все еще смонтирован
-            if (isMounted.current) {
-                const errorMessage = error instanceof Error ? error.message : 'Произошла ошибка при сохранении фотоотчета.';
-                showAlert(errorMessage);
-            }
+            // Закрываем модальное окно при успехе
+            onSave({
+                id: photoReportRecord.id,
+                title: photoReportRecord.title,
+                photos: photoReportRecord.photos,
+                date: photoReportRecord.date
+            });
+        } catch (error) {
+            // Показываем ошибку
+            console.error('Ошибка при сохранении фотоотчета:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Произошла ошибка при сохранении фотоотчета.';
+            showAlert(errorMessage);
         }
     };
 
@@ -243,9 +167,9 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
                     <button 
                         onClick={handleSave} 
                         className="btn btn-primary" 
-                        disabled={!title.trim() || photos.length === 0 || isUploading}
+                        disabled={!title.trim() || photos.length === 0 || isLoading}
                     >
-                        {isUploading ? 'Загрузка...' : 'Создать фотоотчет'}
+                        {isLoading ? 'Загрузка...' : 'Создать фотоотчет'}
                     </button>
                 </div>
             </div>
