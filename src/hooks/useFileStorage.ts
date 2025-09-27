@@ -1,4 +1,4 @@
-import { useState, startTransition } from 'react';
+import { useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { createSupabaseRetryWrapper } from '../utils/supabaseRetry';
 
@@ -120,30 +120,19 @@ export const useFileStorage = () => {
    * @returns результат загрузки с публичным URL и путем
    */
   const uploadFileWithFallback = async (bucketName: string, file: File): Promise<FileUploadResult> => {
-    return new Promise<FileUploadResult>((resolve, reject) => {
-      startTransition(async () => {
-        try {
-          // Сначала пробуем загрузить в Supabase Storage
-          const storageResult = await uploadFile(bucketName, file);
-          if (!storageResult.error) {
-            resolve(storageResult);
-            return;
-          }
-          
-          // Если ошибка, пробуем base64 fallback
-          const base64Result = await uploadFileAsBase64(file);
-          resolve(base64Result);
-        } catch (error) {
-          console.error('Ошибка при загрузке файла:', error);
-          try {
-            const base64Result = await uploadFileAsBase64(file);
-            resolve(base64Result);
-          } catch (fallbackError) {
-            reject(fallbackError);
-          }
-        }
-      });
-    });
+    try {
+      // Сначала пробуем загрузить в Supabase Storage
+      const storageResult = await uploadFile(bucketName, file);
+      if (!storageResult.error) {
+        return storageResult;
+      }
+      
+      // Если ошибка, пробуем base64 fallback
+      return await uploadFileAsBase64(file);
+    } catch (error) {
+      console.error('Ошибка при загрузке файла:', error);
+      return await uploadFileAsBase64(file);
+    }
   };
 
   /**
@@ -292,55 +281,48 @@ export const useFileStorage = () => {
     }>;
     date?: string;
   }) => {
-    return new Promise<PhotoReportRecord>((resolve, reject) => {
-      startTransition(async () => {
-        try {
-          const { data: { user }, error: authError } = await supabase.auth.getUser();
-          
-          if (authError) {
-            console.error('Ошибка получения пользователя:', authError);
-            reject(new Error(`Ошибка авторизации: ${authError.message}`));
-            return;
-          }
-          
-          if (!user) {
-            reject(new Error('Пользователь не авторизован'));
-            return;
-          }
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError) {
+        console.error('Ошибка получения пользователя:', authError);
+        throw new Error(`Ошибка авторизации: ${authError.message}`);
+      }
+      
+      if (!user) {
+        throw new Error('Пользователь не авторизован');
+      }
 
-          // Логируем данные перед вставкой в БД
-          const insertData = {
-            user_id: user.id,
-            project_id: photoReportData.project_id,
-            title: photoReportData.title,
-            photos: photoReportData.photos,
-            date: photoReportData.date || new Date().toISOString(),
-          };
-          console.log('Вставляем в БД фотоотчет:', insertData);
-          console.log('Массив photos:', JSON.stringify(insertData.photos, null, 2));
+      // Логируем данные перед вставкой в БД
+      const insertData = {
+        user_id: user.id,
+        project_id: photoReportData.project_id,
+        title: photoReportData.title,
+        photos: photoReportData.photos,
+        date: photoReportData.date || new Date().toISOString(),
+      };
+      console.log('Вставляем в БД фотоотчет:', insertData);
+      console.log('Массив photos:', JSON.stringify(insertData.photos, null, 2));
 
-          const { data, error } = await retryWrapper.mutation(() =>
-            supabase
-              .from('photoreports')
-              .insert(insertData)
-              .select()
-              .single()
-          );
+      const { data, error } = await retryWrapper.mutation(() =>
+        supabase
+          .from('photoreports')
+          .insert(insertData)
+          .select()
+          .single()
+      );
 
-          if (error) {
-            console.error('Ошибка создания фотоотчета:', error);
-            reject(error);
-            return;
-          }
+      if (error) {
+        console.error('Ошибка создания фотоотчета:', error);
+        throw error;
+      }
 
-          console.log('Фотоотчет успешно создан в БД:', data);
-          resolve(data as PhotoReportRecord);
-        } catch (error) {
-          console.error('Ошибка при создании фотоотчета:', error);
-          reject(error);
-        }
-      });
-    });
+      console.log('Фотоотчет успешно создан в БД:', data);
+      return data as PhotoReportRecord;
+    } catch (error) {
+      console.error('Ошибка при создании фотоотчета:', error);
+      throw error;
+    }
   };
 
   /**
