@@ -88,17 +88,28 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
             const uploadPromises = photos.map(async (photo, index) => {
                 try {
                     const uploadResult = await uploadFileWithFallback('photos', photo.file);
+                    
+                    // Проверяем, что загрузка прошла успешно
                     if (uploadResult.error) {
                         throw new Error(`Ошибка загрузки фото "${photo.file.name}": ${uploadResult.error}`);
                     }
-                    return {
+                    
+                    // Проверяем, что у нас есть необходимые данные
+                    if (!uploadResult.publicUrl || !uploadResult.path) {
+                        throw new Error(`Неполные данные после загрузки фото "${photo.file.name}": url=${uploadResult.publicUrl}, path=${uploadResult.path}`);
+                    }
+                    
+                    const photoData = {
                         url: uploadResult.publicUrl,
                         path: uploadResult.path,
                         caption: photo.caption.trim() || 'Без подписи',
                         isBase64: uploadResult.path.startsWith('base64://')
                     };
+                    
+                    console.log(`Фото ${index + 1} успешно загружено:`, photoData);
+                    return photoData;
                 } catch (error) {
-                    console.error(`Ошибка загрузки фото ${index + 1}:`, error);
+                    console.error(`Ошибка загрузки фото ${index + 1} (${photo.file.name}):`, error);
                     throw error;
                 }
             });
@@ -111,15 +122,24 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
             // Проверяем, есть ли файлы сохраненные как base64
             const base64Count = uploadedPhotos.filter(photo => photo.isBase64).length;
             if (base64Count > 0) {
-
+                console.log(`Внимание: ${base64Count} фотографий сохранены как base64 из-за проблем с Storage`);
             }
 
-            // Создаем фотоотчет в базе данных
-            const photoReportRecord = await createPhotoReport({
+            // Проверяем, что у нас есть загруженные фотографии
+            if (uploadedPhotos.length === 0) {
+                throw new Error('Не удалось загрузить ни одной фотографии');
+            }
+
+            // Логируем данные перед сохранением в БД
+            const photoReportData = {
                 project_id: projectId,
                 title: title.trim(),
                 photos: uploadedPhotos,
-            });
+            };
+            console.log('Данные для сохранения в БД:', photoReportData);
+
+            // Создаем фотоотчет в базе данных
+            const photoReportRecord = await createPhotoReport(photoReportData);
 
             // Вызываем callback с данными фотоотчета
             onSave({

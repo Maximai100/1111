@@ -35,6 +35,25 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     headers: {
       'Content-Type': 'application/json',
     },
+    // Добавляем retry логику для сетевых ошибок
+    fetch: (url, options = {}) => {
+      return fetch(url, {
+        ...options,
+        // Увеличиваем таймаут до 30 секунд
+        signal: AbortSignal.timeout(30000),
+      }).catch(async (error) => {
+        // Если это сетевая ошибка, пробуем повторить запрос
+        if (error.name === 'TypeError' && error.message.includes('NetworkError')) {
+          console.warn('🔄 Сетевая ошибка, повторяем запрос через 2 секунды...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          return fetch(url, {
+            ...options,
+            signal: AbortSignal.timeout(30000),
+          });
+        }
+        throw error;
+      });
+    },
   },
   // Настройки для продакшена
   db: {

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, startTransition } from 'react';
 import { supabase } from '../supabaseClient';
+import { createSupabaseRetryWrapper } from '../utils/supabaseRetry';
 
 export interface FileUploadResult {
   publicUrl: string;
@@ -36,6 +37,7 @@ export interface PhotoReportRecord {
 
 export const useFileStorage = () => {
   const [isUploading, setIsUploading] = useState(false);
+  const retryWrapper = createSupabaseRetryWrapper();
 
   /**
    * Конвертирует файл в base64 строку
@@ -118,20 +120,30 @@ export const useFileStorage = () => {
    * @returns результат загрузки с публичным URL и путем
    */
   const uploadFileWithFallback = async (bucketName: string, file: File): Promise<FileUploadResult> => {
-    try {
-      // Сначала пробуем загрузить в Supabase Storage
-      const storageResult = await uploadFile(bucketName, file);
-      if (!storageResult.error) {
-        return storageResult;
-      }
-      
-      // Если ошибка, пробуем base64 fallback
-
-      return await uploadFileAsBase64(file);
-    } catch (error) {
-      console.error('Ошибка при загрузке файла:', error);
-      return await uploadFileAsBase64(file);
-    }
+    return new Promise<FileUploadResult>((resolve, reject) => {
+      startTransition(async () => {
+        try {
+          // Сначала пробуем загрузить в Supabase Storage
+          const storageResult = await uploadFile(bucketName, file);
+          if (!storageResult.error) {
+            resolve(storageResult);
+            return;
+          }
+          
+          // Если ошибка, пробуем base64 fallback
+          const base64Result = await uploadFileAsBase64(file);
+          resolve(base64Result);
+        } catch (error) {
+          console.error('Ошибка при загрузке файла:', error);
+          try {
+            const base64Result = await uploadFileAsBase64(file);
+            resolve(base64Result);
+          } catch (fallbackError) {
+            reject(fallbackError);
+          }
+        }
+      });
+    });
   };
 
   /**
@@ -196,9 +208,11 @@ export const useFileStorage = () => {
     console.log(`Файлу присвоен путь: ${filePath}`);
 
     // --- ЭТО ЕДИНСТВЕННО ПРАВИЛЬНЫЙ СПОСОБ ЗАГРУЗКИ ---
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from(bucketName)
-      .upload(filePath, file); // Передаем сам ФАЙЛ, а не FormData
+    const { data: uploadData, error: uploadError } = await retryWrapper.storage(() =>
+      supabase.storage
+        .from(bucketName)
+        .upload(filePath, file) // Передаем сам ФАЙЛ, а не FormData
+    );
 
     if (uploadError) {
       console.error("!!! ОШИБКА при загрузке в Storage:", uploadError);
@@ -278,40 +292,55 @@ export const useFileStorage = () => {
     }>;
     date?: string;
   }) => {
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError) {
-        console.error('Ошибка получения пользователя:', authError);
-        throw new Error(`Ошибка авторизации: ${authError.message}`);
-      }
-      
-      if (!user) {
-        throw new Error('Пользователь не авторизован');
-      }
+    return new Promise<PhotoReportRecord>((resolve, reject) => {
+      startTransition(async () => {
+        try {
+          const { data: { user }, error: authError } = await supabase.auth.getUser();
+          
+          if (authError) {
+            console.error('Ошибка получения пользователя:', authError);
+            reject(new Error(`Ошибка авторизации: ${authError.message}`));
+            return;
+          }
+          
+          if (!user) {
+            reject(new Error('Пользователь не авторизован'));
+            return;
+          }
 
-      const { data, error } = await supabase
-        .from('photoreports')
-        .insert({
-          user_id: user.id,
-          project_id: photoReportData.project_id,
-          title: photoReportData.title,
-          photos: photoReportData.photos,
-          date: photoReportData.date || new Date().toISOString(),
-        })
-        .select()
-        .single();
+          // Логируем данные перед вставкой в БД
+          const insertData = {
+            user_id: user.id,
+            project_id: photoReportData.project_id,
+            title: photoReportData.title,
+            photos: photoReportData.photos,
+            date: photoReportData.date || new Date().toISOString(),
+          };
+          console.log('Вставляем в БД фотоотчет:', insertData);
+          console.log('Массив photos:', JSON.stringify(insertData.photos, null, 2));
 
-      if (error) {
-        console.error('Ошибка создания фотоотчета:', error);
-        throw error;
-      }
+          const { data, error } = await retryWrapper.mutation(() =>
+            supabase
+              .from('photoreports')
+              .insert(insertData)
+              .select()
+              .single()
+          );
 
-      return data as PhotoReportRecord;
-    } catch (error) {
-      console.error('Ошибка при создании фотоотчета:', error);
-      throw error;
-    }
+          if (error) {
+            console.error('Ошибка создания фотоотчета:', error);
+            reject(error);
+            return;
+          }
+
+          console.log('Фотоотчет успешно создан в БД:', data);
+          resolve(data as PhotoReportRecord);
+        } catch (error) {
+          console.error('Ошибка при создании фотоотчета:', error);
+          reject(error);
+        }
+      });
+    });
   };
 
   /**
@@ -362,12 +391,14 @@ export const useFileStorage = () => {
         throw new Error('Пользователь не авторизован');
       }
 
-      const { data, error } = await supabase
-        .from('photoreports')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('project_id', projectId)
-        .order('date', { ascending: false });
+      const { data, error } = await retryWrapper.query(() =>
+        supabase
+          .from('photoreports')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('project_id', projectId)
+          .order('date', { ascending: false })
+      );
 
       if (error) {
         console.error('Ошибка получения фотоотчетов:', error);
