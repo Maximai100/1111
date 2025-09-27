@@ -15,8 +15,14 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
     const modalRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const { uploadFileWithFallback, createPhotoReport, isUploading } = useFileStorage();
+    
+    // Проверка монтирования компонента для предотвращения обновления состояния после размонтирования
+    const isMounted = useRef(true);
 
     useEffect(() => {
+        // Компонент смонтирован
+        isMounted.current = true;
+        
         if (modalRef.current) {
             const focusableElements = modalRef.current.querySelectorAll<HTMLElement>(
                 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -26,7 +32,12 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
                 firstElement.focus();
             }
         }
-    }, []);
+        
+        // Функция очистки, которая будет вызвана при размонтировании
+        return () => {
+            isMounted.current = false;
+        };
+    }, []); // Пустой массив зависимостей гарантирует, что это сработает только при монтировании/размонтировании
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || []);
@@ -36,11 +47,13 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     const preview = e.target?.result as string;
-                    setPhotos(prev => [...prev, {
-                        file,
-                        preview,
-                        caption: ''
-                    }]);
+                    if (isMounted.current) {
+                        setPhotos(prev => [...prev, {
+                            file,
+                            preview,
+                            caption: ''
+                        }]);
+                    }
                 };
                 reader.readAsDataURL(file);
             }
@@ -53,13 +66,17 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
     };
 
     const handleCaptionChange = (index: number, caption: string) => {
-        setPhotos(prev => prev.map((photo, i) => 
-            i === index ? { ...photo, caption } : photo
-        ));
+        if (isMounted.current) {
+            setPhotos(prev => prev.map((photo, i) => 
+                i === index ? { ...photo, caption } : photo
+            ));
+        }
     };
 
     const handleRemovePhoto = (index: number) => {
-        setPhotos(prev => prev.filter((_, i) => i !== index));
+        if (isMounted.current) {
+            setPhotos(prev => prev.filter((_, i) => i !== index));
+        }
     };
 
     const handleSave = async () => {
@@ -141,19 +158,23 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
             // Создаем фотоотчет в базе данных
             const photoReportRecord = await createPhotoReport(photoReportData);
 
-            // Вызываем callback с данными фотоотчета
-            onSave({
-                id: photoReportRecord.id,
-                title: photoReportRecord.title,
-                photos: uploadedPhotos,
-                date: photoReportRecord.date
-            });
+            // Вызываем callback с данными фотоотчета только если компонент все еще смонтирован
+            if (isMounted.current) {
+                onSave({
+                    id: photoReportRecord.id,
+                    title: photoReportRecord.title,
+                    photos: uploadedPhotos,
+                    date: photoReportRecord.date
+                });
+            }
         } catch (error) {
             console.error('Ошибка при сохранении фотоотчета:', error);
             
-            // Показываем более информативное сообщение об ошибке
-            const errorMessage = error instanceof Error ? error.message : 'Произошла ошибка при сохранении фотоотчета.';
-            showAlert(errorMessage);
+            // Показываем более информативное сообщение об ошибке только если компонент все еще смонтирован
+            if (isMounted.current) {
+                const errorMessage = error instanceof Error ? error.message : 'Произошла ошибка при сохранении фотоотчета.';
+                showAlert(errorMessage);
+            }
         }
     };
 
