@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, startTransition } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { PhotoReportModalProps } from '../../types';
 import { IconClose } from '../common/Icon';
 import { useFileStorage } from '../../hooks/useFileStorage';
@@ -139,16 +139,7 @@ export const PhotoReportModal: React.FC<PhotoReportModalProps> = ({ onClose, onS
             console.log('Данные для сохранения в БД:', photoReportData);
 
             // Создаем фотоотчет в базе данных
-            const photoReportRecord = await new Promise((resolve, reject) => {
-                startTransition(async () => {
-                    try {
-                        const result = await createPhotoReport(photoReportData);
-                        resolve(result);
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
+            const photoReportRecord = await createPhotoReport(photoReportData);
 
             // Вызываем callback с данными фотоотчета
             onSave({
